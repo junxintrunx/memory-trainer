@@ -292,9 +292,11 @@ function rateCard(rating) {
   const cardInState = state.cards.find(c => c.id === card.id);
   if (cardInState) updateCard(cardInState, rating);
 
-  session.sessionScores.push({ cardId: card.id, rating });
+  session.sessionScores.push({ cardId: card.id, rating, attempt: session.userAttempt || '' });
   session.currentCardIndex++;
   session.revealed = false;
+  session.studied = false;
+  session.userAttempt = '';
 
   // Check if we've gone through all due cards — transition to new material
   if (session.currentCardIndex === session.dueCards.length && session.newCardQueue.length > 0) {
@@ -307,6 +309,13 @@ function rateCard(rating) {
   }
 
   save();
+  render('session');
+}
+
+function submitAttempt() {
+  const el = document.getElementById('attempt-input');
+  session.userAttempt = el ? el.value.trim() : '';
+  session.revealed = true;
   render('session');
 }
 
@@ -643,57 +652,96 @@ function renderRecallCard(card) {
           <div class="card-text">${escHtml(card.front)}</div>
         </div>
       </div>
-      <p class="text-center text-muted text-sm mt-8">Try to recall the answer before revealing.</p>
-      <button class="btn btn-primary btn-full mt-12" onclick="revealCard()">Reveal Answer</button>`;
+      <div class="form-group mt-16">
+        <label>Type your answer</label>
+        <textarea id="attempt-input" placeholder="What do you remember?" rows="3" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submitAttempt();}"></textarea>
+      </div>
+      <button class="btn btn-primary btn-full" onclick="submitAttempt()">Submit Answer</button>
+      <button class="btn btn-ghost btn-full mt-8 text-sm" onclick="submitAttempt()">I'm blank... show me</button>`;
   }
 
+  const attempt = session.userAttempt || '';
   return `
     <div class="flashcard-container">
       <div class="flashcard">
-        <span class="card-label">Recall</span>
+        <span class="card-label">Compare</span>
         <div class="card-text">${escHtml(card.front)}</div>
-        <div class="card-answer">${escHtml(card.back)}</div>
+        ${attempt ? `
+          <div class="attempt-section">
+            <div class="attempt-label">Your answer:</div>
+            <div class="attempt-text">${escHtml(attempt)}</div>
+          </div>` : '<div class="attempt-section"><div class="attempt-label">You left it blank.</div></div>'}
+        <div class="card-answer">
+          <div class="answer-label">Correct answer:</div>
+          ${escHtml(card.back)}
+        </div>
       </div>
     </div>
-    <p class="text-center text-muted text-sm mt-8">How well did you recall it?</p>
+    <p class="text-center text-muted text-sm mt-8">Now that you can compare, how did you do?</p>
     <div class="rating-grid">
-      <button class="rating-btn blackout" onclick="rateCard(1)">Blackout<br><span style="font-size:0.7em;opacity:0.8">Total blank</span></button>
-      <button class="rating-btn hard"     onclick="rateCard(2)">Hard<br><span style="font-size:0.7em;opacity:0.8">Almost got it</span></button>
-      <button class="rating-btn good"     onclick="rateCard(3)">Good<br><span style="font-size:0.7em;opacity:0.8">Got it</span></button>
-      <button class="rating-btn easy"     onclick="rateCard(4)">Easy<br><span style="font-size:0.7em;opacity:0.8">Effortless</span></button>
-    </div>
-    <p class="next-review text-center">
-      Next review: Blackout=tomorrow &middot; Hard=tomorrow &middot; Good=${card.repetitions <= 1 ? '3 days' : 'extended'} &middot; Easy=longer
-    </p>`;
+      <button class="rating-btn blackout" onclick="rateCard(1)">Blackout<br><span style="font-size:0.7em;opacity:0.8">Totally wrong</span></button>
+      <button class="rating-btn hard"     onclick="rateCard(2)">Hard<br><span style="font-size:0.7em;opacity:0.8">Partially right</span></button>
+      <button class="rating-btn good"     onclick="rateCard(3)">Good<br><span style="font-size:0.7em;opacity:0.8">Got the gist</span></button>
+      <button class="rating-btn easy"     onclick="rateCard(4)">Easy<br><span style="font-size:0.7em;opacity:0.8">Nailed it</span></button>
+    </div>`;
 }
 
 function renderNewMaterialCard(card) {
-  if (!session.revealed) {
+  // Phase 1: Study the material
+  if (!session.studied) {
     return `
       <div class="flashcard-container">
         <div class="flashcard">
-          <span class="card-label">New Material</span>
+          <span class="card-label">New Material — Study</span>
           <div class="card-text">${escHtml(card.front)}</div>
           <div class="card-answer" style="color: var(--text);">${escHtml(card.back)}</div>
         </div>
       </div>
-      <p class="text-center text-muted text-sm mt-8">Study this. Then cover the answer and test yourself.</p>
-      <button class="btn btn-primary btn-full mt-12" onclick="revealCard()">I've Studied It — Test Me</button>`;
+      <p class="text-center text-muted text-sm mt-8">Read and absorb this. When you're ready, you'll type it back from memory.</p>
+      <button class="btn btn-primary btn-full mt-12" onclick="session.studied=true;render('session')">I've Got It — Test Me</button>`;
   }
 
+  // Phase 2: Type from memory
+  if (!session.revealed) {
+    return `
+      <div class="flashcard-container">
+        <div class="flashcard">
+          <span class="card-label">New Material — Retrieve</span>
+          <div class="card-text">${escHtml(card.front)}</div>
+        </div>
+      </div>
+      <div class="form-group mt-16">
+        <label>Type what you remember</label>
+        <textarea id="attempt-input" placeholder="What do you remember?" rows="3" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submitAttempt();}"></textarea>
+      </div>
+      <button class="btn btn-primary btn-full" onclick="submitAttempt()">Submit Answer</button>
+      <button class="btn btn-ghost btn-full mt-8 text-sm" onclick="submitAttempt()">I'm blank... show me</button>`;
+  }
+
+  // Phase 3: Compare and rate
+  const attempt = session.userAttempt || '';
   return `
     <div class="flashcard-container">
       <div class="flashcard">
-        <span class="card-label">Test Yourself</span>
+        <span class="card-label">Compare</span>
         <div class="card-text">${escHtml(card.front)}</div>
+        ${attempt ? `
+          <div class="attempt-section">
+            <div class="attempt-label">Your answer:</div>
+            <div class="attempt-text">${escHtml(attempt)}</div>
+          </div>` : '<div class="attempt-section"><div class="attempt-label">You left it blank.</div></div>'}
+        <div class="card-answer">
+          <div class="answer-label">Correct answer:</div>
+          ${escHtml(card.back)}
+        </div>
       </div>
     </div>
-    <p class="text-center text-muted text-sm mt-8">Without looking — how well did you recall the answer?</p>
+    <p class="text-center text-muted text-sm mt-8">How close were you?</p>
     <div class="rating-grid">
-      <button class="rating-btn blackout" onclick="rateCard(1)">Blackout<br><span style="font-size:0.7em;opacity:0.8">Total blank</span></button>
-      <button class="rating-btn hard"     onclick="rateCard(2)">Hard<br><span style="font-size:0.7em;opacity:0.8">Almost got it</span></button>
-      <button class="rating-btn good"     onclick="rateCard(3)">Good<br><span style="font-size:0.7em;opacity:0.8">Got it</span></button>
-      <button class="rating-btn easy"     onclick="rateCard(4)">Easy<br><span style="font-size:0.7em;opacity:0.8">Effortless</span></button>
+      <button class="rating-btn blackout" onclick="rateCard(1)">Blackout<br><span style="font-size:0.7em;opacity:0.8">Totally wrong</span></button>
+      <button class="rating-btn hard"     onclick="rateCard(2)">Hard<br><span style="font-size:0.7em;opacity:0.8">Partially right</span></button>
+      <button class="rating-btn good"     onclick="rateCard(3)">Good<br><span style="font-size:0.7em;opacity:0.8">Got the gist</span></button>
+      <button class="rating-btn easy"     onclick="rateCard(4)">Easy<br><span style="font-size:0.7em;opacity:0.8">Nailed it</span></button>
     </div>`;
 }
 

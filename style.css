@@ -277,6 +277,36 @@ label {
   font-size: 1rem;
 }
 
+/* ===== ATTEMPT / COMPARE ===== */
+.attempt-section {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: rgba(79, 142, 247, 0.08);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  width: 100%;
+  text-align: left;
+}
+
+.attempt-label, .answer-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.attempt-text {
+  font-size: 0.95rem;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.card-answer .answer-label {
+  color: var(--green);
+}
+
 /* ===== RATING BUTTONS ===== */
 .rating-grid {
   display: grid;
