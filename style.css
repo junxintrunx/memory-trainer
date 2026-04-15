@@ -307,6 +307,79 @@ label {
   color: var(--green);
 }
 
+/* ===== AUTO-GRADE DISPLAY ===== */
+.grade-result {
+  text-align: center;
+}
+
+.grade-score {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 32px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  margin-bottom: 12px;
+}
+
+.grade-pct {
+  font-size: 2.2rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.grade-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+}
+
+.grade-terms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+  justify-content: center;
+}
+
+.grade-terms-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-right: 4px;
+}
+
+.term-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.term-pill.hit {
+  background: rgba(62, 207, 110, 0.15);
+  color: var(--green);
+}
+
+.term-pill.miss {
+  background: rgba(224, 92, 92, 0.15);
+  color: var(--red);
+}
+
+.override-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 /* ===== RATING BUTTONS ===== */
 .rating-grid {
   display: grid;

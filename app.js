@@ -297,6 +297,7 @@ function rateCard(rating) {
   session.revealed = false;
   session.studied = false;
   session.userAttempt = '';
+  session.autoGrade = null;
 
   // Check if we've gone through all due cards — transition to new material
   if (session.currentCardIndex === session.dueCards.length && session.newCardQueue.length > 0) {
@@ -312,9 +313,96 @@ function rateCard(rating) {
   render('session');
 }
 
+// ===== AUTO-GRADING =====
+const STOP_WORDS = new Set([
+  'a','an','the','is','are','was','were','be','been','being','have','has','had',
+  'do','does','did','will','would','shall','should','may','might','can','could',
+  'of','in','to','for','with','on','at','from','by','about','as','into','through',
+  'during','before','after','above','below','between','under','again','further',
+  'then','once','that','this','these','those','it','its','and','but','or','nor',
+  'not','no','so','if','when','than','too','very','just','also','more','most',
+  'other','some','such','only','same','how','what','which','who','whom','why',
+  'where','here','there','each','every','all','both','few','many','much','own',
+  'because','while','although','though','since','until','unless','however',
+  'therefore','thus','hence','yet','still','already','often','never','always',
+  'sometimes','usually','rather','quite','well','way','even','get','got','make',
+  'made','like','use','used','one','two','three','first','new','know','think',
+  'take','come','see','them','they','their','you','your','we','our','i','me','my',
+  'he','she','him','her','his','us','up','out','over','down','off','back','work',
+  'called','means','refers','known','term','thing','things','something','part',
+  'form','type','types','based','using','without','within','along','across'
+]);
+
+function extractKeyTerms(text) {
+  // Normalize and split
+  const words = text.toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 1 && !STOP_WORDS.has(w));
+
+  // Also extract meaningful multi-word phrases (2-word combos)
+  const normalized = text.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ');
+  const allWords = normalized.split(/\s+/).filter(w => w.length > 1);
+  const phrases = [];
+  for (let i = 0; i < allWords.length - 1; i++) {
+    if (!STOP_WORDS.has(allWords[i]) && !STOP_WORDS.has(allWords[i + 1])) {
+      phrases.push(allWords[i] + ' ' + allWords[i + 1]);
+    }
+  }
+
+  return { words: [...new Set(words)], phrases: [...new Set(phrases)] };
+}
+
+function gradeAttempt(attempt, correctAnswer) {
+  if (!attempt || attempt.trim().length === 0) return { rating: 1, pct: 0, matched: [], missed: [] };
+
+  const answer = extractKeyTerms(correctAnswer);
+  const user = attempt.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ');
+
+  // Check which key terms the user hit
+  const matched = [];
+  const missed = [];
+
+  for (const word of answer.words) {
+    if (user.includes(word)) {
+      matched.push(word);
+    } else {
+      missed.push(word);
+    }
+  }
+
+  // Bonus for phrase matches (hitting multi-word concepts)
+  let phraseBonus = 0;
+  for (const phrase of answer.phrases) {
+    if (user.includes(phrase)) phraseBonus += 0.5;
+  }
+
+  const total = answer.words.length;
+  if (total === 0) return { rating: 3, pct: 100, matched, missed };
+
+  const rawPct = ((matched.length + phraseBonus) / total) * 100;
+  const pct = Math.min(100, Math.round(rawPct));
+
+  let rating;
+  if (pct >= 80)      rating = 4; // Easy — nailed it
+  else if (pct >= 55)  rating = 3; // Good — got the gist
+  else if (pct >= 25)  rating = 2; // Hard — partially right
+  else                 rating = 1; // Blackout — missed it
+
+  return { rating, pct, matched, missed };
+}
+
 function submitAttempt() {
   const el = document.getElementById('attempt-input');
   session.userAttempt = el ? el.value.trim() : '';
+
+  // Auto-grade
+  const allCards = [...session.dueCards, ...session.newCardQueue];
+  const card = allCards[session.currentCardIndex];
+  if (card) {
+    session.autoGrade = gradeAttempt(session.userAttempt, card.back);
+  }
+
   session.revealed = true;
   render('session');
 }
@@ -661,10 +749,14 @@ function renderRecallCard(card) {
   }
 
   const attempt = session.userAttempt || '';
+  const grade = session.autoGrade || { rating: 1, pct: 0, matched: [], missed: [] };
+  const ratingLabels = ['', 'Blackout', 'Hard', 'Good', 'Easy'];
+  const ratingColors = ['', 'var(--red)', 'var(--yellow)', 'var(--green)', 'var(--accent)'];
+
   return `
     <div class="flashcard-container">
       <div class="flashcard">
-        <span class="card-label">Compare</span>
+        <span class="card-label">Results</span>
         <div class="card-text">${escHtml(card.front)}</div>
         ${attempt ? `
           <div class="attempt-section">
@@ -677,12 +769,20 @@ function renderRecallCard(card) {
         </div>
       </div>
     </div>
-    <p class="text-center text-muted text-sm mt-8">Now that you can compare, how did you do?</p>
-    <div class="rating-grid">
-      <button class="rating-btn blackout" onclick="rateCard(1)">Blackout<br><span style="font-size:0.7em;opacity:0.8">Totally wrong</span></button>
-      <button class="rating-btn hard"     onclick="rateCard(2)">Hard<br><span style="font-size:0.7em;opacity:0.8">Partially right</span></button>
-      <button class="rating-btn good"     onclick="rateCard(3)">Good<br><span style="font-size:0.7em;opacity:0.8">Got the gist</span></button>
-      <button class="rating-btn easy"     onclick="rateCard(4)">Easy<br><span style="font-size:0.7em;opacity:0.8">Nailed it</span></button>
+
+    <div class="grade-result mt-16">
+      <div class="grade-score" style="border-color:${ratingColors[grade.rating]}">
+        <span class="grade-pct" style="color:${ratingColors[grade.rating]}">${grade.pct}%</span>
+        <span class="grade-label" style="color:${ratingColors[grade.rating]}">${ratingLabels[grade.rating]}</span>
+      </div>
+      ${grade.matched.length > 0 ? `<div class="grade-terms"><span class="grade-terms-label text-green">Hit:</span> ${grade.matched.map(w => `<span class="term-pill hit">${escHtml(w)}</span>`).join(' ')}</div>` : ''}
+      ${grade.missed.length > 0 ? `<div class="grade-terms"><span class="grade-terms-label text-red">Missed:</span> ${grade.missed.map(w => `<span class="term-pill miss">${escHtml(w)}</span>`).join(' ')}</div>` : ''}
+    </div>
+
+    <button class="btn btn-primary btn-full mt-16" onclick="rateCard(${grade.rating})">Continue</button>
+    <div class="override-row mt-8">
+      <span class="text-xs text-muted">Override: </span>
+      ${[1,2,3,4].filter(r => r !== grade.rating).map(r => `<button class="btn btn-ghost btn-sm" onclick="rateCard(${r})" style="color:${ratingColors[r]};padding:4px 10px;font-size:0.75rem;">${ratingLabels[r]}</button>`).join('')}
     </div>`;
 }
 
@@ -718,12 +818,16 @@ function renderNewMaterialCard(card) {
       <button class="btn btn-ghost btn-full mt-8 text-sm" onclick="submitAttempt()">I'm blank... show me</button>`;
   }
 
-  // Phase 3: Compare and rate
+  // Phase 3: Auto-graded results
   const attempt = session.userAttempt || '';
+  const grade = session.autoGrade || { rating: 1, pct: 0, matched: [], missed: [] };
+  const ratingLabels = ['', 'Blackout', 'Hard', 'Good', 'Easy'];
+  const ratingColors = ['', 'var(--red)', 'var(--yellow)', 'var(--green)', 'var(--accent)'];
+
   return `
     <div class="flashcard-container">
       <div class="flashcard">
-        <span class="card-label">Compare</span>
+        <span class="card-label">Results</span>
         <div class="card-text">${escHtml(card.front)}</div>
         ${attempt ? `
           <div class="attempt-section">
@@ -736,12 +840,20 @@ function renderNewMaterialCard(card) {
         </div>
       </div>
     </div>
-    <p class="text-center text-muted text-sm mt-8">How close were you?</p>
-    <div class="rating-grid">
-      <button class="rating-btn blackout" onclick="rateCard(1)">Blackout<br><span style="font-size:0.7em;opacity:0.8">Totally wrong</span></button>
-      <button class="rating-btn hard"     onclick="rateCard(2)">Hard<br><span style="font-size:0.7em;opacity:0.8">Partially right</span></button>
-      <button class="rating-btn good"     onclick="rateCard(3)">Good<br><span style="font-size:0.7em;opacity:0.8">Got the gist</span></button>
-      <button class="rating-btn easy"     onclick="rateCard(4)">Easy<br><span style="font-size:0.7em;opacity:0.8">Nailed it</span></button>
+
+    <div class="grade-result mt-16">
+      <div class="grade-score" style="border-color:${ratingColors[grade.rating]}">
+        <span class="grade-pct" style="color:${ratingColors[grade.rating]}">${grade.pct}%</span>
+        <span class="grade-label" style="color:${ratingColors[grade.rating]}">${ratingLabels[grade.rating]}</span>
+      </div>
+      ${grade.matched.length > 0 ? `<div class="grade-terms"><span class="grade-terms-label text-green">Hit:</span> ${grade.matched.map(w => `<span class="term-pill hit">${escHtml(w)}</span>`).join(' ')}</div>` : ''}
+      ${grade.missed.length > 0 ? `<div class="grade-terms"><span class="grade-terms-label text-red">Missed:</span> ${grade.missed.map(w => `<span class="term-pill miss">${escHtml(w)}</span>`).join(' ')}</div>` : ''}
+    </div>
+
+    <button class="btn btn-primary btn-full mt-16" onclick="rateCard(${grade.rating})">Continue</button>
+    <div class="override-row mt-8">
+      <span class="text-xs text-muted">Override: </span>
+      ${[1,2,3,4].filter(r => r !== grade.rating).map(r => `<button class="btn btn-ghost btn-sm" onclick="rateCard(${r})" style="color:${ratingColors[r]};padding:4px 10px;font-size:0.75rem;">${ratingLabels[r]}</button>`).join('')}
     </div>`;
 }
 
