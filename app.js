@@ -56,6 +56,15 @@ function load() {
     try {
       const saved = JSON.parse(raw);
       state = Object.assign(JSON.parse(JSON.stringify(defaultState)), saved);
+      // Migration: existing users without topic selection get a fresh start
+      if (state.profile.onboardingComplete && !state.profile.topicsSelected) {
+        state.profile.onboardingComplete = false;
+        state.cards = [];
+        state.stats = JSON.parse(JSON.stringify(defaultState.stats));
+        state.streak = JSON.parse(JSON.stringify(defaultState.streak));
+        state.achievements = [];
+        save();
+      }
     } catch (e) {
       console.error('Failed to load saved state', e);
     }
@@ -698,7 +707,7 @@ function renderOnboarding() {
       <div class="card">
         <div class="form-group">
           <label>What's your name?</label>
-          <input type="text" id="ob-name" placeholder="Nathaniel" />
+          <input type="text" id="ob-name" placeholder="Nathaniel" value="${state.profile.name || ''}" />
         </div>
         <div class="form-group">
           <label>Pick your topic${Object.keys(TOPIC_DECKS).length > 1 ? 's' : ''}</label>
@@ -727,6 +736,7 @@ function finishOnboarding() {
   const name = nameEl ? nameEl.value.trim() : '';
   state.profile.name = name || 'Athlete';
   state.profile.onboardingComplete = true;
+  state.profile.topicsSelected = true;
 
   // Load selected decks
   const checked = document.querySelectorAll('.deck-picker input:checked');
