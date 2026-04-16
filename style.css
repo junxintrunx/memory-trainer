@@ -89,6 +89,7 @@ p  { color: var(--muted); }
 .btn:active { transform: scale(0.97); }
 
 .btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:disabled { background: var(--surface2); color: var(--muted); cursor: not-allowed; opacity: 0.6; }
 .btn-success { background: var(--green); color: #fff; }
 .btn-ghost   { background: transparent; color: var(--text); border: 1px solid var(--border); }
 .btn-danger  { background: var(--red); color: #fff; }
@@ -127,6 +128,28 @@ label {
 }
 
 .form-group { margin-bottom: 20px; }
+
+/* ===== DECK PICKER ===== */
+.deck-picker { display: flex; flex-direction: column; gap: 10px; }
+.deck-option { cursor: pointer; display: block; }
+.deck-option input { display: none; }
+.deck-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--surface2);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  transition: border-color 0.2s, background 0.2s;
+}
+.deck-option input:checked + .deck-card {
+  border-color: var(--accent);
+  background: rgba(79, 142, 247, 0.08);
+}
+.deck-icon { font-size: 28px; flex-shrink: 0; }
+.deck-info { display: flex; flex-direction: column; gap: 2px; }
+.deck-info strong { font-size: 15px; }
 
 /* ===== STAT CHIPS ===== */
 .stat-chip {

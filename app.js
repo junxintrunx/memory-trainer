@@ -333,15 +333,40 @@ const STOP_WORDS = new Set([
   'form','type','types','based','using','without','within','along','across'
 ]);
 
+// Number-word to digit mapping
+const NUM_WORDS = {
+  zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,
+  ten:10,eleven:11,twelve:12,fifteen:15,twenty:20,thirty:30,fifty:50,hundred:100
+};
+
+// Normalize text for grading: lowercase, expand number words, collapse hyphens/ranges
+function normalizeForGrading(text) {
+  let t = text.toLowerCase().replace(/[^a-z0-9\s.%-]/g, ' ');
+  // Expand number words to digits ("two" → "2")
+  t = t.replace(/\b[a-z]+\b/g, w => NUM_WORDS[w] !== undefined ? String(NUM_WORDS[w]) : w);
+  // Collapse "X to Y" into "X-Y" so ranges match ("2 to 4" → "2-4")
+  t = t.replace(/(\d+)\s+to\s+(\d+)/g, '$1-$2');
+  // Collapse "X times" or "Xx" frequency notation ("4 times" → "4x")
+  t = t.replace(/(\d+)\s*times/g, '$1x');
+  return t;
+}
+
+// Lightweight stemmer: strip common suffixes to match verb/noun forms
+function stem(word) {
+  if (word.length <= 3) return word;
+  return word
+    .replace(/(ating|tion|sion|ment|ness|ance|ence|ity|ous|ive|ful|less|ally|ably|ibly)$/, '')
+    .replace(/(ates|ting|ing|ted|ed|es|er|ly|al|s)$/, '')
+    || word;
+}
+
 function extractKeyTerms(text) {
-  // Normalize and split
-  const words = text.toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, ' ')
+  const normalized = normalizeForGrading(text);
+  const words = normalized
     .split(/\s+/)
     .filter(w => w.length > 1 && !STOP_WORDS.has(w));
 
   // Also extract meaningful multi-word phrases (2-word combos)
-  const normalized = text.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ');
   const allWords = normalized.split(/\s+/).filter(w => w.length > 1);
   const phrases = [];
   for (let i = 0; i < allWords.length - 1; i++) {
@@ -353,18 +378,34 @@ function extractKeyTerms(text) {
   return { words: [...new Set(words)], phrases: [...new Set(phrases)] };
 }
 
+// Check if a keyword appears in the user text (with stemming fallback)
+function keywordMatch(userText, userStems, keyword) {
+  // Direct substring match (handles multi-char tokens, numbers, ranges)
+  if (userText.includes(keyword)) return true;
+  // Stem-based match: "stimulates" stem matches "supports" won't, but
+  // "stimulates" / "stimulated" / "stimulating" will all match "stimulate"
+  const kwStem = stem(keyword);
+  if (kwStem.length > 2 && userStems.has(kwStem)) return true;
+  return false;
+}
+
 function gradeAttempt(attempt, correctAnswer) {
   if (!attempt || attempt.trim().length === 0) return { rating: 1, pct: 0, matched: [], missed: [] };
 
   const answer = extractKeyTerms(correctAnswer);
-  const user = attempt.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ');
+  const userNorm = normalizeForGrading(attempt);
+
+  // Pre-compute stems of all user words for fast lookup
+  const userStems = new Set(
+    userNorm.split(/\s+/).filter(w => w.length > 1).map(w => stem(w))
+  );
 
   // Check which key terms the user hit
   const matched = [];
   const missed = [];
 
   for (const word of answer.words) {
-    if (user.includes(word)) {
+    if (keywordMatch(userNorm, userStems, word)) {
       matched.push(word);
     } else {
       missed.push(word);
@@ -374,7 +415,7 @@ function gradeAttempt(attempt, correctAnswer) {
   // Bonus for phrase matches (hitting multi-word concepts)
   let phraseBonus = 0;
   for (const phrase of answer.phrases) {
-    if (user.includes(phrase)) phraseBonus += 0.5;
+    if (userNorm.includes(phrase)) phraseBonus += 0.5;
   }
 
   const total = answer.words.length;
@@ -490,61 +531,135 @@ function render(view) {
 }
 
 // ===== STARTER DECK =====
-// 30 cards drawn from memory science research. Loaded on first run.
-const STARTER_DECK = [
-  // How memory works
-  ["What are the three stages of memory?", "Acquisition (taking in information), Consolidation (stabilizing memory traces during sleep), and Recall (retrieving stored information)."],
-  ["Why is sleep non-negotiable for memory?", "Sleep is when consolidation happens. Without it, neural traces from the day's learning are not stabilized. Missed sleep cannot be fully recovered on later nights."],
-  ["What does the hippocampus do?", "It consolidates short-term memories into long-term storage, primarily during sleep. Damage here prevents new long-term memories from forming."],
-  ["What is the Ebbinghaus Forgetting Curve?", "Without review, most new information is lost within 24-48 hours. Memory decays exponentially unless deliberately reviewed."],
-  ["How does exercise affect memory?", "Moderate-intensity exercise (60-85% max heart rate) stimulates neuroplasticity and supports memory function. Consistency matters more than session length — 2-4x per week for 8-24 weeks minimum."],
+// ===== TOPIC DECKS =====
+// Each deck is sourced from NotebookLM research notebooks
+const TOPIC_DECKS = {
+  cognition: {
+    name: 'Cognition & Memory Training',
+    icon: '🧠',
+    desc: 'Spaced repetition, deliberate practice, working memory, habit formation',
+    cards: [
+      ["What is the 'spacing effect' in cognitive psychology?", "Distributing learning across multiple time intervals significantly enhances long-term memory retention compared to massed learning or cramming."],
+      ["How does retrieval practice differ from passive review?", "Passive review relies on familiarity memory, creating an illusion of mastery. Active retrieval practice strengthens recollective memory, creating deeper neural traces and improving long-term retention by 30-50%."],
+      ["What does the Ebbinghaus forgetting curve illustrate?", "Memory retention drops rapidly over time following an exponential decay pattern unless information is actively retrieved and repeatedly reinforced."],
+      ["What specific criteria distinguish deliberate practice from naive practice?", "Deliberate practice requires well-defined goals, intense concentration, and immediate informative feedback to successively refine performance. Naive practice is routine activity with no targeted goals."],
+      ["Why is deliberate practice limited to 4-5 hours per day for elite performers?", "It requires such intense concentration and mental effort that it cannot be sustained indefinitely without extensive rest and recovery to maintain training quality."],
+      ["How does deliberate practice structure the acquisition of complex skills?", "It breaks down a complex target skill into smaller, attainable sub-skills that can be practiced and refined in isolation before being integrated."],
+      ["What cognitive mechanism is targeted by the dual n-back task?", "Dual n-back targets working memory by forcing the brain to simultaneously track, maintain, and update two independent streams of stimuli (visual and auditory) while managing interference."],
+      ["Does dual n-back training significantly increase general fluid intelligence?", "No. When compared against active control groups, the far-transfer effect on general fluid intelligence drops to near zero. It reliably improves working memory and attentional control only."],
+      ["What is d-prime and why is it the preferred metric for dual n-back?", "D-prime is a signal-detection metric that measures true working memory ability by distinguishing actual matches from non-matches, bypassing raw accuracy which can be skewed by guessing."],
+      ["What is the optimal protocol for dual n-back training?", "20-25 minutes daily split into 4-5 shorter sessions, 4-5 days per week, for a minimum of 4 weeks."],
+      ["What is the foundational mechanism of the Method of Loci?", "It leverages spatial memory by encoding information as vivid, exaggerated mental images and anchoring them along an ordered sequence of familiar physical locations."],
+      ["How does the Method of Loci leverage context-dependent memory?", "Mentally navigating the familiar locations during recall systematically reinstates the original encoding context, which acts as a robust retrieval cue."],
+      ["Which brain regions are predominantly activated when using the Method of Loci?", "It functionally reorganizes the brain to rely on posterior navigation networks, heavily activating the hippocampus, parahippocampus, and retrosplenial cortex."],
+      ["What are the three types of cognitive load?", "Intrinsic load (inherent difficulty of the topic), extraneous load (unnecessary strain from poor instructional design), and germane load (productive effort required to build mental schemas)."],
+      ["What is the 'worked example effect'?", "Novices learn better by studying step-by-step solved problems rather than solving them independently, because it reduces extraneous cognitive load on working memory."],
+      ["What is the split-attention effect?", "Working memory is overloaded when a learner must simultaneously process and mentally integrate two physically separated sources of information, like a diagram and disconnected text."],
+      ["What is the core formula of the Fogg Behavior Model?", "B = MAP. A behavior occurs only when Motivation, Ability, and a Prompt converge simultaneously. When a habit fails, increase Ability (simplify the task) rather than chasing motivation."],
+      ["What are the three types of prompts in the Fogg Behavior Model?", "A Facilitator (high motivation, low ability), a Spark (high ability, low motivation), and a Signal (both motivation and ability are already high)."],
+      ["What are the four stages of the Atomic Habits loop?", "Cue triggers a craving, which motivates a response, which yields a reward that satisfies the craving and reinforces the cue. Engineer all four stages for lasting habits."],
+      ["What is habit stacking and why is it effective?", "Pairing a new desired behavior with a current automatic habit. It utilizes existing neural pathways to effectively bypass the need for high motivation."],
+      ["What balance of conditions is required to achieve a flow state?", "A perfect balance between perceived task difficulty and individual skill level, along with clearly defined goals and immediate feedback."],
+      ["How does a flow state physically alter brain function?", "The prefrontal cortex temporarily deactivates, a process called transient hypofrontality, causing loss of self-awareness and distorted sense of time while implicit brain systems take over."],
+      ["Which brainwave patterns correlate with the flow state?", "Increased theta wave activity and moderate alpha wave activity, particularly in the frontal and central regions of the brain."],
+      ["Which phase of memory processing occurs during sleep?", "Memory consolidation, where fragile neural traces acquired during the day are strengthened and stabilized into long-term storage."],
+      ["How does sleep deprivation damage the brain's memory architecture?", "It dismantles neuronal connectivity by dramatically reducing dendritic spines and dendrite length in the CA1 region of the hippocampus."],
+      ["What molecular pathway dismantles dendritic spines during sleep loss?", "Sleep deprivation elevates PDE4A5, suppressing the cAMP-PKA-LIMK signaling pathway. This increases cofilin activity, a protein that severs actin filaments in spines."],
+      ["What is the optimal exercise intensity for improving cognitive function?", "Moderate-intensity exercise reaching 60-85% of maximum heart rate is consistently associated with the most significant cognitive benefits."],
+      ["When evaluating exercise for cognitive health, what matters more than session length?", "Consistency and adherence over time. 30-minute sessions provide similar benefits to 60-minute sessions."],
+      ["Which cognitive domain requires the longest exercise program to improve?", "Executive function requires long-term multi-component exercise interventions lasting 25 weeks or more, while global cognition improves with shorter programs."],
+      ["According to Ericsson, what is the true source of 'innate talent' in elite performers?", "Exceptional characteristics are not from unique genetic talent but from physiological and anatomical adaptations caused by a minimum of 10 years of intense deliberate practice."],
+    ]
+  },
+  regulation: {
+    name: 'Blood Sugar & Regulation',
+    icon: '🩸',
+    desc: 'Glucose, insulin, mood, cognition, meal strategy',
+    cards: [
+      ["What two primary hormones from the pancreas regulate glucose homeostasis?", "Insulin and glucagon. Insulin promotes glucose uptake into tissues to lower blood sugar after a meal, while glucagon stimulates the liver to release stored glucose during a fasted state."],
+      ["Which cells in the pancreas produce insulin and glucagon?", "Insulin is produced by beta cells (65-80% of pancreatic islet cells). Glucagon is secreted from alpha cells (15-20% of islet cells)."],
+      ["How does the body defend against low blood sugar?", "Low glucose is a severe survival threat to the brain. The body uses glucagon to stimulate hepatic glucose production, and if blood sugar drops too quickly, it releases cortisol and adrenaline to force levels back up."],
+      ["What is the main difference between Glycemic Index and Glycemic Load?", "GI measures how quickly a food raises blood sugar. GL integrates GI with the actual amount of carbohydrates in a specific portion, providing a more accurate real-world impact on blood sugar."],
+      ["Why does watermelon have a high GI but a low GL?", "Watermelon has a high GI (74) because its sugars are rapidly absorbed, but a standard serving contains very little actual carbohydrate, so its glycemic load is only 4."],
+      ["How does a high-glycemic load diet affect mood?", "High-GL diets are associated with 38% higher scores for depressive symptoms and 26% higher scores for fatigue and inertia compared to low-GL diets."],
+      ["What is reactive hypoglycemia?", "A condition where blood sugar drops below normal levels after eating a meal, usually within a four-hour window, caused by an exaggerated second-phase insulin secretion."],
+      ["What mechanism causes the blood sugar crash in reactive hypoglycemia?", "An exaggerated, delayed second-phase secretion of insulin overshoots and removes glucose from the blood too quickly, driving blood sugar down and causing a crash."],
+      ["Can reactive hypoglycemia mimic other severe conditions?", "Yes. In extreme cases it can mimic a stroke or TIA in non-diabetic individuals, with symptoms like hemiparesis or difficulty speaking."],
+      ["How does glycemic variability affect mood?", "Rapid fluctuations in blood sugar correlate strongly with negative affect, anxiety, and depression. Rapid spikes and drops trigger sympathetic overactivity, leading to restlessness and irritability."],
+      ["What are the cognitive consequences of acute hypoglycemia?", "It starves the brain of its primary fuel, causing dizziness, confusion, brain fog, and impaired visual working memory. Severe drops can cause seizures or coma."],
+      ["How does chronic hyperglycemia impact executive function?", "It drives neuroinflammation, oxidative stress, and structural damage to the blood-brain barrier, accelerating cognitive decline and impairing processing speed over time."],
+      ["How does fructose metabolism differ from glucose in the brain?", "Fructose bypasses the main regulatory step of glycolysis (phosphofructokinase). In the hypothalamus, this unregulated metabolism can rapidly deplete ATP and falsely increase food intake."],
+      ["How does fructose affect brain reward centers differently than glucose?", "Fructose causes significantly greater brain reactivity to food cues in the visual cortex and orbital frontal cortex, promoting hunger and desire for high-calorie foods."],
+      ["Does fructose trigger the same satiety hormones as glucose?", "No. Fructose does not stimulate insulin or leptin to the same degree as glucose. Because both signal satiety, fructose acts as a much weaker suppressor of appetite."],
+      ["What is the 'carbohydrates-last' meal sequencing strategy?", "Eating vegetables (fiber) and protein first, then waiting about 10 minutes before consuming carbohydrates during a meal."],
+      ["How effective is changing food order for managing postprandial glucose?", "Consuming protein and vegetables before carbohydrates can reduce incremental postprandial glucose peaks by over 40%."],
+      ["Why does eating protein and fiber before carbs stabilize blood sugar?", "Protein slows gastric emptying and blunts the insulin response, while fiber slows glucose absorption. This combination prevents rapid spikes and subsequent energy crashes."],
+      ["Why is Alzheimer's sometimes called 'Type 3 Diabetes'?", "Alzheimer's is deeply linked to brain-specific insulin resistance, which impairs glucose metabolism, promotes amyloid-beta accumulation, and drives neurodegeneration."],
+      ["How does insulin resistance affect amyloid-beta clearance?", "Hyperinsulinemia competitively inhibits insulin-degrading enzyme (IDE), which clears both insulin and amyloid-beta. This diverts IDE activity and favors plaque accumulation."],
+      ["What role does GSK-3 beta play in insulin-resistant neurodegeneration?", "Insulin resistance removes inhibition of GSK-3 beta, which then abnormally phosphorylates tau proteins, forming neurofibrillary tangles and destabilizing the neuronal cytoskeleton."],
+      ["Can restoring brain insulin signaling reverse early cognitive decline?", "Animal models and clinical trials suggest brain insulin resistance is reversible. Intranasal insulin has been shown to restore signaling, reduce amyloid burden, and improve memory recall."],
+      ["How do CGMs benefit non-diabetic individuals?", "They provide real-time glycemic data to identify personal trigger foods and patterns that lead to energy crashes, optimizing diet and activity choices."],
+      ["What have CGMs revealed about exercise timing?", "Personalizing exercise timing, such as walking right before an individual's specific postprandial glucose peak, significantly reduces glucose, insulin, and C-peptide levels."],
+      ["What non-dietary factors elevate blood glucose in non-diabetics?", "Psychological stress and poor sleep quality can significantly elevate blood glucose levels even without any food intake."],
+      ["How does dysglycemia cause 'glutamate dominance' in the brain?", "High-glucose environments and chronic stress disrupt the balance between inhibitory GABA and excitatory glutamate, leading to neurotoxic excess glutamate associated with anxiety and insomnia."],
+      ["How does the brain's reward system adapt to rapid glucose spikes?", "Rapid spikes trigger dopamine release, reinforcing sugar cravings. Frequent spikes downregulate dopamine receptors, requiring more sugar for the same satisfaction."],
+      ["How does brain insulin resistance affect dopamine?", "Central insulin resistance directly impairs dopamine turnover, decreasing reward processing and triggering compensatory overeating and anxiety."],
+      ["How do sudden blood sugar drops affect stress hormones?", "A rapid drop triggers sympathetic release of adrenaline and cortisol to mobilize stored glucose. This surge directly causes anxiety, tremors, and agitation."],
+      ["How can CGMs be used as a behavioral motivation tool?", "Seeing tangible, immediate data on how physical activity positively impacts physiology increases readiness and motivation to engage in behavior change."],
+    ]
+  },
+  facebook: {
+    name: 'Facebook & Organic Growth',
+    icon: '📱',
+    desc: 'Algorithm, reach, automation, monetization, 2026 rules',
+    cards: [
+      ["What is the highest-weighted engagement metric in the 2026 Facebook algorithm?", "The Private Share, when users send a post to friends via Messenger or WhatsApp. This signals high utility and trust, prompting the AI to recommend the post to a wider audience."],
+      ["What is the '6-Hour Testing Window' in Facebook's algorithm?", "The first 6 hours after posting are critical for measuring interaction density. High interaction during this window can extend a post's organic lifespan for up to seven days."],
+      ["How does the '9 to 12 Post Rule' affect content reach?", "Facebook scans an account's last 9 to 12 posts to assign a 'brand tag.' Posting about scattered, unrelated topics dilutes reach because the AI cannot accurately define the target audience."],
+      ["How do follower limits differ between personal profiles and Professional Mode?", "Personal profiles are limited to 5,000 friends. Professional Mode removes this cap, allowing unlimited public followers while maintaining the traditional friend limit."],
+      ["How do admin capabilities differ between Business Pages and Professional Mode?", "Business Pages support multiple administrative roles (editors, moderators). Professional Mode profiles are managed solely by the account owner with no role delegation."],
+      ["How often can admins switch a Business Page's category designation?", "Meta allows switching between 'Business' and 'Creator' categories once every seven days."],
+      ["What is the 'First 3 Seconds Rule' for organic video?", "Users decide whether to stay on a video in less than 3 seconds. A strong hook must be front-loaded to capture attention and ensure high video completion rates."],
+      ["What is the optimal weekly posting frequency for organic reach?", "3 to 5 times per week. This maintains visibility without triggering algorithmic 'follower fatigue' from low-quality spam."],
+      ["Why has the 'Comment-to-DM' strategy become essential for sharing links?", "Meta is testing limits restricting non-verified accounts to just two external links per month in captions. Marketers post without links, ask users to comment a keyword, then auto-DM the link."],
+      ["What is ManyChat primarily used for in Facebook marketing?", "A visual flow builder that creates complex conversation paths for Business Pages, heavily used to trigger automated DM replies based on specific comment keywords and capture lead data."],
+      ["What is the '24-hour standard messaging window' enforced by Meta?", "Businesses can reply freely within 24 hours of a user's last interaction. Messages outside this window require approved message tags or explicit opt-ins for marketing messages."],
+      ["What compliance tag is needed for ManyChat DMs triggered by comments?", "The first automated message must be tagged as a 'Comment Reply' inside ManyChat. Without this tag, the automation risks violating Meta's 24-hour messaging rule."],
+      ["What is the primary function of Meta Business Suite?", "A centralized front-end dashboard for day-to-day management: scheduling posts, managing unified inboxes across Facebook and Instagram, and viewing basic analytics."],
+      ["What is the primary function of Meta Business Manager?", "Back-end administrative tool for large teams and agencies, used to manage multiple ad accounts, assign granular role-based permissions, and handle complex billing and integrations."],
+      ["How do advertising capabilities differ between Business Suite and Business Manager?", "Business Suite only supports basic ad management like post boosting. Business Manager provides full Ads Manager access with custom audiences, A/B testing, and budget optimization."],
+      ["How do engagement rates compare between Facebook Groups and Business Pages?", "Active private Groups frequently see 20%+ engagement rates. Public Business Pages typically average just 2-4%."],
+      ["What is the core difference in content flow between a Page and a Group?", "A Page is a one-to-many broadcast tool for announcements. A Group is a many-to-many environment for community discussion and member-to-member interaction."],
+      ["How does Facebook's algorithm distribute Group content vs Page content?", "Page content relies on AI-driven distribution based on engagement signals. Group content visibility is largely user-driven, depending on notification settings and peer engagement."],
+      ["What is the Facebook Content Monetization Program?", "A consolidated earning system merging In-stream ads, Ads on Reels, and Performance Bonuses into one place, tracking earnings across Reels, long-form video, photos, and text posts."],
+      ["What are the baseline requirements for Facebook video monetization in 2026?", "At least 10,000 followers, 5 active public posts or videos, and 600,000 minutes of watch time across all videos in the past 60 days."],
+      ["What is the Creator Fast Track program?", "An initiative offering established creators from other platforms guaranteed monthly pay for three months, requiring at least 15 eligible original Reels per month on 10 separate days."],
+      ["When is a reaction video classified as 'unoriginal' under Meta's 2026 rules?", "When the creator merely watches silently, reacts only with facial expressions, or narrates what is already visible. Original reaction videos must add fresh analysis or substantive commentary."],
+      ["What are the penalties for repeatedly posting unoriginal content?", "Reduced reach across ALL posts (not just the unoriginal ones), loss of monetization eligibility, and classification as non-recommendable to new audiences."],
+      ["How does Meta treat videos with watermarks from other platforms?", "Videos with visible TikTok or YouTube watermarks are explicitly flagged as unoriginal and deprioritized in feed and Reels recommendations."],
+      ["How does browser fingerprinting trigger automation bans?", "Security algorithms collect hardware/software data to create a persistent digital identity. Multiple accounts sharing the same fingerprint get flagged and banned for multi-accounting."],
+      ["How do human pattern triggers expose automated accounts?", "Sending the exact same number of requests daily or performing monotonous actions creates predictable patterns. Automation must randomize delays and mimic human browsing behaviors."],
+      ["What are the risks of cheap VPNs or shared proxies for automation?", "They are associated with scraping bots, and if one user on a shared proxy is flagged for spam, all accounts on that IP neighborhood may be banned."],
+      ["What is Manus AI's role within Meta Ads Manager?", "An autonomous partner that analyzes ad performance, profiles audiences, and shifts budgets from underperforming ads to winning campaigns, handling data extraction and report generation."],
+      ["How does Manus AI integrate with WhatsApp Business?", "It connects directly to WhatsApp to automate lead interactions: checking calendars, pulling pricing documents, and drafting context-aware professional responses in seconds."],
+      ["How is Manus AI paired with AdAmigo.ai?", "Manus provides strategy and data analysis but lacks creative generation. AdAmigo autonomously creates on-brand image and video ad variations based on Manus's strategic insights."],
+    ]
+  }
+};
 
-  // Spaced repetition
-  ["What is spaced repetition?", "Distributing retrieval practice over gradually increasing intervals so that each review happens at the optimal moment — just before forgetting. Proven to be the most effective long-term retention strategy."],
-  ["What is the optimal spaced repetition interval sequence?", "First review: 1 day. Second: 3 days. Third: 7 days. Fourth: 14 days. Fifth: 30 days. Intervals expand as retention strengthens."],
-  ["What is the spacing effect?", "Memory is significantly stronger when study sessions are spaced over time rather than massed together (cramming). Coined by Ebbinghaus in 1885, confirmed by hundreds of studies since."],
-
-  // Active recall
-  ["What is active recall?", "Actively struggling to retrieve information WITHOUT looking at the source. The act of retrieval itself strengthens the neural memory trace."],
-  ["What is the 'illusion of competence'?", "Passive review (rereading, highlighting, watching) makes material feel familiar without actually being retained. You feel like you know it, but can't produce it."],
-  ["What does meta-analysis say about practice testing vs. other study methods?", "Practice testing is rated 'high utility' — vastly superior to concept mapping, elaborative interrogation, and rereading. The testing effect is one of the most replicated findings in cognitive psychology."],
-  ["What is the testing effect?", "The act of retrieving information from memory actually alters and strengthens the memory trace itself. Being tested is not just measurement — it is learning."],
-
-  // Method of Loci
-  ["What is the Method of Loci (Memory Palace)?", "An ancient spatial mnemonic technique: you anchor vivid mental images of information to specific locations along a familiar physical route. Used by memory champions worldwide."],
-  ["What cognitive mechanisms make the Memory Palace work?", "Dual coding (pairing visual imagery with verbal/factual information), the self-reference effect (placing yourself in the scene), and elaborative processing (creating meaningful associations)."],
-  ["What is the 'Dr. Faust effect' in memory palace use?", "Overloading a single locus with too much data causes memory traces to bleed together. Leave mental 'white space' between loci."],
-  ["What types of information is the Memory Palace best suited for?", "Sequential information, lists, narratives, names and faces — anything that benefits from spatial ordering and vivid imagery."],
-
-  // Working memory
-  ["What is working memory?", "The active mental workspace for holding and manipulating information in real time. Think of it as your mental RAM. Limited capacity — typically 4-7 chunks."],
-  ["What does Dual N-Back training reliably improve?", "Working memory capacity and attentional control (effect size SMD 0.18-0.37). Claims of boosted general IQ were overstated — those studies used passive control groups."],
-
-  // Deliberate practice
-  ["What separates deliberate practice from naive practice?", "Deliberate practice: individualized training designed by a coach or system, operating in the zone of proximal development, with immediate feedback targeting specific weaknesses. Naive practice: routine activity with no targeted goals."],
-  ["What is the zone of proximal development?", "The space between what you can do without help and what you can't yet do at all. Effective training always operates here — challenging but not overwhelming."],
-  ["Why does intense focus matter for memory encoding?", "Deliberate practice requires intense concentration. Even elite performers max out at 4-5 hours/day. For a busy dad, 5 minutes of genuine focus beats 30 minutes of distracted review."],
-
-  // Cognitive load
-  ["What is extraneous cognitive load?", "Mental strain caused by poor design — unnecessary complexity, split attention, or redundant information. It consumes working memory without building knowledge. Minimize it."],
-  ["What is germane cognitive load?", "The productive mental effort required to build new mental schemas. This is the work that creates actual learning. Maximize it."],
-  ["What is the split-attention effect?", "When related information is separated on the page or screen, the brain must mentally integrate them, increasing cognitive load. Keep related information physically integrated."],
-  ["What is dual coding theory?", "Combining verbal and visual information slightly expands working memory capacity and significantly improves retention. Words + images are encoded through separate channels, reinforcing each other."],
-
-  // Habit formation
-  ["What is the Fogg Behavior Model?", "B = MAP. A behavior occurs only when Motivation, Ability, and a Prompt converge simultaneously. When a habit fails, increase Ability (simplify the task) rather than chasing higher motivation."],
-  ["What is habit stacking?", "Pairing a new behavior with an existing automatic habit. 'After I pour my morning coffee, I open the memory trainer.' The existing habit becomes the cue."],
-  ["What is the Atomic Habits loop?", "Cue (make it obvious) → Craving (make it attractive) → Response (make it easy) → Reward (make it satisfying). Lasting habits require engineering all four stages."],
-  ["What does identity have to do with habit change?", "Lasting change requires a shift in how you see yourself, not just what you do. 'I am someone who trains my mind daily' is more durable than any motivation strategy."],
-
-  // Gamification
-  ["What is 'motivational crowding out' in gamification?", "Heavy reliance on external rewards (badges, points, leaderboards) eventually destroys intrinsic motivation. Once the rewards stop, the behavior stops. Gamify the core activity itself, not wrappers around it."],
-  ["What triggers a flow state?", "Flow (Csikszentmihalyi) is triggered when challenge level perfectly matches current skill level. Too easy = boredom. Too hard = anxiety. The sweet spot produces intense focus and loss of self-consciousness."],
-];
+// Legacy: keep STARTER_DECK pointing to cognition for backwards compatibility
+const STARTER_DECK = TOPIC_DECKS.cognition.cards;
 
 function loadStarterDeck() {
+  // Legacy: load cognition deck if no topic was chosen (existing users)
+  loadDeck('cognition');
+}
+
+function loadDeck(deckId) {
+  const deck = TOPIC_DECKS[deckId];
+  if (!deck) return;
   const existing = new Set(state.cards.map(c => c.front));
-  for (const [front, back] of STARTER_DECK) {
+  for (const [front, back] of deck.cards) {
     if (!existing.has(front)) {
       state.cards.push(createCard(front, back));
     }
@@ -552,8 +667,27 @@ function loadStarterDeck() {
   save();
 }
 
+function loadSelectedDecks(deckIds) {
+  for (const id of deckIds) {
+    loadDeck(id);
+  }
+}
+
 // ===== ONBOARDING =====
 function renderOnboarding() {
+  const deckOptions = Object.entries(TOPIC_DECKS).map(([id, deck]) => `
+    <label class="deck-option" onclick="toggleDeck('${id}')">
+      <input type="checkbox" id="deck-${id}" value="${id}" />
+      <span class="deck-card">
+        <span class="deck-icon">${deck.icon}</span>
+        <span class="deck-info">
+          <strong>${deck.name}</strong>
+          <span class="text-sm text-muted">${deck.desc}</span>
+          <span class="text-sm text-muted">${deck.cards.length} cards</span>
+        </span>
+      </span>
+    </label>`).join('');
+
   return `
     <div class="page fade-in">
       <div class="onboarding-logo">
@@ -562,14 +696,30 @@ function renderOnboarding() {
         <p class="mt-8">5 minutes a day. Sharper mind. Every day.</p>
       </div>
       <div class="card">
-        <p class="text-sm text-muted mb-16">30 science-backed training cards are loaded and ready. Just enter your name and start.</p>
         <div class="form-group">
           <label>What's your name?</label>
           <input type="text" id="ob-name" placeholder="Nathaniel" />
         </div>
-        <button class="btn btn-primary btn-full btn-lg" onclick="finishOnboarding()">Start Training</button>
+        <div class="form-group">
+          <label>Pick your topic${Object.keys(TOPIC_DECKS).length > 1 ? 's' : ''}</label>
+          <p class="text-sm text-muted mb-8">Choose what you want to train on. You can add more later.</p>
+          <div class="deck-picker">${deckOptions}</div>
+        </div>
+        <button class="btn btn-primary btn-full btn-lg" id="ob-start-btn" onclick="finishOnboarding()" disabled>Select a topic to start</button>
       </div>
     </div>`;
+}
+
+function toggleDeck(id) {
+  // Update button state based on selections
+  setTimeout(() => {
+    const checked = document.querySelectorAll('.deck-picker input:checked');
+    const btn = document.getElementById('ob-start-btn');
+    if (btn) {
+      btn.disabled = checked.length === 0;
+      btn.textContent = checked.length > 0 ? 'Start Training' : 'Select a topic to start';
+    }
+  }, 0);
 }
 
 function finishOnboarding() {
@@ -577,7 +727,15 @@ function finishOnboarding() {
   const name = nameEl ? nameEl.value.trim() : '';
   state.profile.name = name || 'Athlete';
   state.profile.onboardingComplete = true;
-  loadStarterDeck();
+
+  // Load selected decks
+  const checked = document.querySelectorAll('.deck-picker input:checked');
+  const selectedIds = Array.from(checked).map(el => el.value);
+  if (selectedIds.length > 0) {
+    loadSelectedDecks(selectedIds);
+  } else {
+    loadStarterDeck(); // fallback
+  }
   save();
   render('home');
 }
