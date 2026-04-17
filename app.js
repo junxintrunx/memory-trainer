@@ -348,6 +348,53 @@ const NUM_WORDS = {
   ten:10,eleven:11,twelve:12,fifteen:15,twenty:20,thirty:30,fifty:50,hundred:100
 };
 
+// Abbreviation ↔ full form mapping (bidirectional matching)
+const ABBREVIATIONS = {
+  'gi':'glycemic index','gl':'glycemic load','bmi':'body mass index',
+  'bmr':'basal metabolic rate','tdee':'total daily energy expenditure',
+  'rda':'recommended daily allowance','hiit':'high intensity interval training',
+  'liss':'low intensity steady state','hr':'heart rate','bp':'blood pressure',
+  'cns':'central nervous system','pns':'peripheral nervous system',
+  'rem':'rapid eye movement','ldl':'low density lipoprotein',
+  'hdl':'high density lipoprotein','epa':'eicosapentaenoic acid',
+  'dha':'docosahexaenoic acid','vo2':'oxygen consumption',
+  'neat':'non exercise activity thermogenesis',
+  'epoc':'excess post exercise oxygen consumption',
+  'crp':'c reactive protein','hpa':'hypothalamic pituitary adrenal',
+  'rom':'range of motion','rpe':'rate of perceived exertion',
+  'amrap':'as many reps as possible','emom':'every minute on the minute',
+  'doms':'delayed onset muscle soreness','mps':'muscle protein synthesis',
+  'mpb':'muscle protein breakdown','rmr':'resting metabolic rate',
+  'tef':'thermic effect of food','rhr':'resting heart rate',
+  'hrv':'heart rate variability','mhr':'max heart rate',
+  'eer':'estimated energy requirement','dri':'dietary reference intake',
+  'ai':'adequate intake','ul':'tolerable upper intake level',
+  'gerd':'gastroesophageal reflux disease','ibs':'irritable bowel syndrome',
+  'sibo':'small intestinal bacterial overgrowth',
+  'fodmap':'fermentable oligosaccharides disaccharides monosaccharides and polyols'
+};
+// Reverse map: full-form word → [abbreviation, ...]
+const WORD_TO_ABBR = {};
+for (const [abbr, full] of Object.entries(ABBREVIATIONS)) {
+  for (const w of full.split(' ')) {
+    if (STOP_WORDS.has(w)) continue;
+    if (!WORD_TO_ABBR[w]) WORD_TO_ABBR[w] = [];
+    if (!WORD_TO_ABBR[w].includes(abbr)) WORD_TO_ABBR[w].push(abbr);
+  }
+}
+
+// Low-weight modifier words: common qualifiers that don't test domain knowledge
+const LOW_WEIGHT_WORDS = new Set([
+  'actual','actually','standard','specific','specifically',
+  'particular','particularly','typical','typically',
+  'general','generally','normal','normally','regular','regularly',
+  'common','commonly','basically','essentially','primarily',
+  'mainly','simply','directly','effectively','overall',
+  'certain','meaning','example','especially','often',
+  'small','large','high','low','good','bad','best','worst',
+  'long','short','early','late','fast','slow','found','given'
+]);
+
 // Normalize text for grading: lowercase, expand number words, collapse hyphens/ranges
 function normalizeForGrading(text) {
   let t = text.toLowerCase().replace(/[^a-z0-9\s.%-]/g, ' ');
@@ -387,14 +434,21 @@ function extractKeyTerms(text) {
   return { words: [...new Set(words)], phrases: [...new Set(phrases)] };
 }
 
-// Check if a keyword appears in the user text (with stemming fallback)
-function keywordMatch(userText, userStems, keyword) {
+// Check if a keyword appears in the user text (with stemming + synonym fallback)
+function keywordMatch(userText, userStems, keyword, userWords) {
   // Direct substring match (handles multi-char tokens, numbers, ranges)
   if (userText.includes(keyword)) return true;
-  // Stem-based match: "stimulates" stem matches "supports" won't, but
-  // "stimulates" / "stimulated" / "stimulating" will all match "stimulate"
+  // Stem-based match
   const kwStem = stem(keyword);
   if (kwStem.length > 2 && userStems.has(kwStem)) return true;
+  // Abbreviation → full form: keyword is an abbreviation, check if user wrote it out
+  if (ABBREVIATIONS[keyword] && userText.includes(ABBREVIATIONS[keyword])) return true;
+  // Full form → abbreviation: keyword is part of a full form, check if user used the abbreviation
+  if (WORD_TO_ABBR[keyword]) {
+    for (const abbr of WORD_TO_ABBR[keyword]) {
+      if (userWords.has(abbr)) return true;
+    }
+  }
   return false;
 }
 
@@ -404,33 +458,61 @@ function gradeAttempt(attempt, correctAnswer) {
   const answer = extractKeyTerms(correctAnswer);
   const userNorm = normalizeForGrading(attempt);
 
-  // Pre-compute stems of all user words for fast lookup
-  const userStems = new Set(
-    userNorm.split(/\s+/).filter(w => w.length > 1).map(w => stem(w))
-  );
+  // Pre-compute stems and word set for fast lookup
+  const userTokens = userNorm.split(/\s+/).filter(w => w.length > 1);
+  const userStems = new Set(userTokens.map(w => stem(w)));
+  const userWords = new Set(userTokens);
 
   // Check which key terms the user hit
   const matched = [];
   const missed = [];
 
   for (const word of answer.words) {
-    if (keywordMatch(userNorm, userStems, word)) {
+    if (keywordMatch(userNorm, userStems, word, userWords)) {
       matched.push(word);
     } else {
       missed.push(word);
     }
   }
 
-  // Bonus for phrase matches (hitting multi-word concepts)
+  // Concept grouping: when two adjacent keywords form a phrase in the answer
+  // and the user hit one but missed the other, give partial credit for the miss
+  const matchedSet = new Set(matched);
+  const conceptRecovered = new Set();
+  for (const phrase of answer.phrases) {
+    const [w1, w2] = phrase.split(' ');
+    if (matchedSet.has(w1) && !matchedSet.has(w2) && !conceptRecovered.has(w2)) {
+      conceptRecovered.add(w2);
+    } else if (matchedSet.has(w2) && !matchedSet.has(w1) && !conceptRecovered.has(w1)) {
+      conceptRecovered.add(w1);
+    }
+  }
+
+  // Phrase bonus for exact multi-word matches
   let phraseBonus = 0;
   for (const phrase of answer.phrases) {
     if (userNorm.includes(phrase)) phraseBonus += 0.5;
   }
 
-  const total = answer.words.length;
-  if (total === 0) return { rating: 3, pct: 100, matched, missed };
+  // Weighted scoring: low-weight modifiers count less, concept-recovered get partial credit
+  const weight = (w) => LOW_WEIGHT_WORDS.has(w) ? 0.3 : 1.0;
+  let totalWeight = 0;
+  let earnedWeight = 0;
 
-  const rawPct = ((matched.length + phraseBonus) / total) * 100;
+  for (const word of answer.words) {
+    const w = weight(word);
+    totalWeight += w;
+    if (matchedSet.has(word)) {
+      earnedWeight += w;
+    } else if (conceptRecovered.has(word)) {
+      earnedWeight += w * 0.5;
+    }
+  }
+  earnedWeight += phraseBonus;
+
+  if (totalWeight === 0) return { rating: 3, pct: 100, matched, missed };
+
+  const rawPct = (earnedWeight / totalWeight) * 100;
   const pct = Math.min(100, Math.round(rawPct));
 
   let rating;
