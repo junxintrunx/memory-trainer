@@ -392,12 +392,83 @@ const LOW_WEIGHT_WORDS = new Set([
   'mainly','simply','directly','effectively','overall',
   'certain','meaning','example','especially','often',
   'small','large','high','low','good','bad','best','worst',
-  'long','short','early','late','fast','slow','found','given'
+  'long','short','early','late','fast','slow','found','given',
+  // Connector/framing verbs that structure a sentence but don't carry the concept
+  'providing','provide','offering','offer','yielding','yield','delivering','deliver'
 ]);
+
+// Conceptual synonym groups. Any word can appear in multiple groups (membership is additive).
+// Keep entries lowercase. Multi-word entries use spaces; hyphenated entries keep the hyphen.
+const SYNONYM_GROUPS = [
+  // --- Speed / rate ---
+  ['quickly','rapidly','fast','quick','rapid','swift','swiftly','instantly','immediately'],
+  ['slowly','slow','gradually','gradual'],
+  // --- Rise / fall / release ---
+  ['raises','raise','elevates','elevate','increases','increase','boosts','boost','spikes','spike','lifts','lift','released','release','releases','secretes','secrete'],
+  ['lowers','lower','decreases','decrease','drops','drop','reduces','reduce','falls','fall','diminishes','diminish'],
+  ['produces','produce','generates','generate','creates','create'],
+  // --- Measurement / accuracy ---
+  ['measures','measure','quantifies','quantify','assesses','assess','gauges','gauge'],
+  ['accurate','precise','relevant','reliable','exact','correct'],
+  ['real-world','real world','actual life','everyday','practical','real life'],
+  // --- Quantity / portion ---
+  ['amount','quantity','volume'],
+  ['portion','serving','helping'],
+  ['impact','effect','influence'],
+  ['providing','giving','offering','yielding','delivering'],
+  // --- Health / biology ---
+  ['glucose','sugar'],
+  ['carbohydrate','carbohydrates','carbs','carb'],
+  ['vegetable','vegetables','veggie','veggies'],
+  ['food','meal','meals'],
+  // --- Cognition ---
+  ['recall','remember','retrieve','retrieval'],
+  ['learn','learning','acquire','studying'],
+  ['practice','rehearsal','drill'],
+  ['focus','attention','concentration'],
+  ['strengthens','strengthen','reinforces','reinforce','improves','improve','enhances','enhance'],
+  ['weakens','weaken','impairs','impair','damages','damage','harms','harm','dismantles','dismantle'],
+  ['activates','activate','stimulates','stimulate','engages','engage'],
+  ['suppresses','suppress','deactivates','deactivate','inhibits','inhibit'],
+  // --- Social / Facebook ---
+  ['post','posts','content'],
+  ['audience','viewers','followers'],
+  ['engagement','interaction','interactions'],
+  ['reach','distribution','visibility','exposure'],
+  ['video','videos','clip','clips','reel','reels'],
+  ['account','accounts','profile','profiles'],
+  ['message','messages','dm'],
+  // --- Generic verbs ---
+  ['causes','cause','triggers','trigger'],
+  ['shows','show','demonstrates','demonstrate','reveals','reveal','indicates','indicate'],
+  ['prevents','prevent','blocks','block','avoids','avoid'],
+  ['important','critical','essential','crucial','vital'],
+  ['begins','begin','starts','start','initiates','initiate'],
+  ['ends','end','stops','stop','finishes','finish'],
+  ['typical','normal','standard','usual','common'],
+  ['goal','target','objective','aim'],
+  ['difficulty','challenge','hard','tough'],
+  ['contains','contain','includes','include','comprises','comprise'],
+  ['uses','use','utilizes','utilize','employs','employ','leverages','leverage'],
+  ['creates','create','makes','make','builds','build','generates','generate'],
+  ['removes','remove','eliminates','eliminate','strips','strip'],
+  ['same','similar','identical','equivalent'],
+  ['different','distinct','unique','separate'],
+];
+// Bidirectional lookup: word → Set of synonyms (union across all groups it belongs to)
+const SYNONYMS = {};
+for (const group of SYNONYM_GROUPS) {
+  for (const word of group) {
+    if (!SYNONYMS[word]) SYNONYMS[word] = new Set();
+    for (const other of group) {
+      if (other !== word) SYNONYMS[word].add(other);
+    }
+  }
+}
 
 // Normalize text for grading: lowercase, expand number words, collapse hyphens/ranges
 function normalizeForGrading(text) {
-  let t = text.toLowerCase().replace(/[^a-z0-9\s.%-]/g, ' ');
+  let t = text.toLowerCase().replace(/[^a-z0-9\s%-]/g, ' ');
   // Expand number words to digits ("two" → "2")
   t = t.replace(/\b[a-z]+\b/g, w => NUM_WORDS[w] !== undefined ? String(NUM_WORDS[w]) : w);
   // Collapse "X to Y" into "X-Y" so ranges match ("2 to 4" → "2-4")
@@ -410,10 +481,18 @@ function normalizeForGrading(text) {
 // Lightweight stemmer: strip common suffixes to match verb/noun forms
 function stem(word) {
   if (word.length <= 3) return word;
-  return word
-    .replace(/(ating|tion|sion|ment|ness|ance|ence|ity|ous|ive|ful|less|ally|ably|ibly)$/, '')
-    .replace(/(ates|ting|ing|ted|ed|es|er|ly|al|s)$/, '')
-    || word;
+  let w = word;
+  // -ies → -y (studies → study, carries → carry)
+  if (w.length > 4 && w.endsWith('ies')) w = w.slice(0, -3) + 'y';
+  // Derivational suffixes
+  w = w.replace(/(ating|tion|sion|ment|ness|ance|ence|ity|ous|ive|ful|less|ally|ably|ibly)$/, '');
+  // Inflectional suffixes
+  w = w.replace(/(ates|ting|ing|ted|ed|es|er|ly|al|s)$/, '');
+  // -i → -y (restore y that became i before -ed/-es: studied → studi → study)
+  if (w.length > 3 && w.endsWith('i')) w = w.slice(0, -1) + 'y';
+  // Strip trailing "e" so "measure" and "measur" (from "measures") collapse
+  if (w.length > 3 && w.endsWith('e')) w = w.slice(0, -1);
+  return w || word;
 }
 
 function extractKeyTerms(text) {
@@ -438,6 +517,8 @@ function extractKeyTerms(text) {
 function keywordMatch(userText, userStems, keyword, userWords) {
   // Direct substring match (handles multi-char tokens, numbers, ranges)
   if (userText.includes(keyword)) return true;
+  // Hyphen ↔ space: "real-world" keyword matches user typing "real world"
+  if (keyword.includes('-') && userText.includes(keyword.replace(/-/g, ' '))) return true;
   // Stem-based match
   const kwStem = stem(keyword);
   if (kwStem.length > 2 && userStems.has(kwStem)) return true;
@@ -447,6 +528,22 @@ function keywordMatch(userText, userStems, keyword, userWords) {
   if (WORD_TO_ABBR[keyword]) {
     for (const abbr of WORD_TO_ABBR[keyword]) {
       if (userWords.has(abbr)) return true;
+    }
+  }
+  // Conceptual synonyms: "quickly" matches "rapidly", "sugar" matches "glucose", etc.
+  const syns = SYNONYMS[keyword];
+  if (syns) {
+    for (const syn of syns) {
+      // Multi-word synonym ("actual life") → substring check
+      if (syn.includes(' ') || syn.includes('-')) {
+        if (userText.includes(syn)) return true;
+        if (syn.includes('-') && userText.includes(syn.replace(/-/g, ' '))) return true;
+      } else {
+        // Single word: check raw token OR stem
+        if (userWords.has(syn)) return true;
+        const synStem = stem(syn);
+        if (synStem.length > 2 && userStems.has(synStem)) return true;
+      }
     }
   }
   return false;
