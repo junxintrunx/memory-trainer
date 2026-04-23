@@ -421,6 +421,8 @@ const SYNONYM_GROUPS = [
   ['carbohydrate','carbohydrates','carbs','carb'],
   ['vegetable','vegetables','veggie','veggies'],
   ['food','meal','meals'],
+  // --- People ---
+  ['people','individuals','individual','person','persons','humans','human','folks'],
   // --- Cognition ---
   ['recall','remember','retrieve','retrieval'],
   ['learn','learning','acquire','studying'],
