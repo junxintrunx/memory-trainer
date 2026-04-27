@@ -98,18 +98,40 @@ function last28Days() {
   return days;
 }
 
+function isWeekend(dateStr) {
+  const day = new Date(dateStr + 'T12:00:00').getDay();
+  return day === 0 || day === 6;
+}
+
+// Previous Mon-Fri date. From Monday goes back to Friday; from Sat/Sun goes to the most recent Friday.
+function prevBusinessDay(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  const day = d.getDay();
+  let back;
+  if (day === 1) back = 3;        // Mon → Fri
+  else if (day === 0) back = 2;   // Sun → Fri
+  else back = 1;                  // Sat → Fri, Tue-Fri → prev day
+  d.setDate(d.getDate() - back);
+  return d.toLocaleDateString('en-CA');
+}
+
 // ===== STREAK MANAGEMENT =====
+// Streak counts Mon-Fri only. Weekends never break the streak and do not advance it.
 function checkStreakIntegrity() {
   const t = today();
-  const yesterday = addDays(t, -1);
-  const twoDaysAgo = addDays(t, -2);
 
-  // If streak > 0 but neither today nor yesterday was completed, reset
-  if (state.streak.count > 0 && !state.streak.history[t] && !state.streak.history[yesterday]) {
+  // No reset on weekends — Friday's streak rolls untouched into Monday
+  if (isWeekend(t)) return;
+
+  const prev = prevBusinessDay(t);
+  const prevPrev = prevBusinessDay(prev);
+
+  // If streak > 0 but neither today nor the previous business day was completed, reset
+  if (state.streak.count > 0 && !state.streak.history[t] && !state.streak.history[prev]) {
     // Check if freeze applies
-    if (state.streak.freezeAvailable && state.streak.history[twoDaysAgo]) {
-      // Use freeze — yesterday is forgiven, streak intact
-      state.streak.history[yesterday] = 'frozen';
+    if (state.streak.freezeAvailable && state.streak.history[prevPrev]) {
+      // Use freeze — previous business day is forgiven, streak intact
+      state.streak.history[prev] = 'frozen';
       state.streak.freezeAvailable = false;
       save();
     } else {
@@ -121,15 +143,22 @@ function checkStreakIntegrity() {
 
 function markSessionComplete() {
   const t = today();
-  const yesterday = addDays(t, -1);
 
   if (state.streak.history[t] === true) return; // already counted today
 
   state.streak.history[t] = true;
+  state.stats.totalSessions++;
 
-  const yesterdayDone = state.streak.history[yesterday] === true || state.streak.history[yesterday] === 'frozen';
+  // Weekend sessions are recorded for the calendar but do not move the streak
+  if (isWeekend(t)) {
+    save();
+    return;
+  }
 
-  if (yesterdayDone || state.streak.count === 0) {
+  const prev = prevBusinessDay(t);
+  const prevDone = state.streak.history[prev] === true || state.streak.history[prev] === 'frozen';
+
+  if (prevDone || state.streak.count === 0) {
     state.streak.count++;
   } else {
     state.streak.count = 1;
@@ -144,7 +173,6 @@ function markSessionComplete() {
     state.streak.freezeAvailable = true;
   }
 
-  state.stats.totalSessions++;
   save();
 }
 
